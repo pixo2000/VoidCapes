@@ -1,0 +1,4 @@
+gif to cape
+external userconfig
+
+mod command und gui für upload -> downloadedtrash chat für api
