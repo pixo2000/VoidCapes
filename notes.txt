@@ -1,4 +1,6 @@
 gif to cape
-external userconfig
+remove totp visible on web
+delete api endpoint for command
+rename buttons
 
-mod command und gui für upload -> downloadedtrash chat für api
+web in main.py not index
