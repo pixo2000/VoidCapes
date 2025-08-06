@@ -487,7 +487,8 @@ def require_login():
     # Skip authentication for API endpoints and login page
     if request.endpoint and (request.endpoint == 'login' or 
                             request.endpoint == 'api_check_cape' or 
-                            request.endpoint == 'api_download_cape'):
+                            request.endpoint == 'api_download_cape' or
+                            request.endpoint == 'api_delete_cape'):
         return
     
     if not check_auth():

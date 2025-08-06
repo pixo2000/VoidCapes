@@ -3,6 +3,10 @@ config.json
 *.secret
 *.key
 
+.gradle/
+bin/
+build/
+
 # Python
 __pycache__/
 *.py[cod]
