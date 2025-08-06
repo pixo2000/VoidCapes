@@ -10,7 +10,7 @@ import re
 from urllib.parse import urlparse
 import tempfile
 import shutil
-from PIL import Image
+from PIL import Image, ImageDraw
 import hashlib
 import pyotp
 import qrcode
@@ -88,6 +88,340 @@ CAPES_DIR = "/var/www/html/capes"
 PORT = 4563
 ALLOWED_EXTENSIONS = {'png', 'gif'}
 SESSION_TIMEOUT = 600  # 10 minutes in seconds
+
+class MinecraftCapeCreator:
+    def __init__(self):
+        self.scale = 6  # Max resolution (64 pixels becomes 384 pixels at scale 6)
+        self.elytra_image = False  # Default to no elytra
+        self.auto_color = True
+        self.color = None
+        self.mode = "zoom"  # "zoom" (default) or "fit"
+        
+    def set_elytra_enabled(self, enabled):
+        """Enable or disable elytra generation"""
+        self.elytra_image = enabled
+        
+    def set_mode(self, mode):
+        """Set image processing mode: 'zoom' (crop to fill) or 'fit' (fit entirely with color fill)"""
+        if mode in ["zoom", "fit"]:
+            self.mode = mode
+        else:
+            raise ValueError("Mode must be 'zoom' or 'fit'")
+        
+    def set_scale(self, scale):
+        """Set scale (1-6), where 6 is maximum resolution"""
+        self.scale = max(1, min(scale, 6))
+        self.actual_scale = 2 ** (self.scale - 1)
+    
+    def calculate_average_color(self, image):
+        """Calculate average color from image for auto-color feature"""
+        # Convert to RGB if not already
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Get pixel data
+        pixels = list(image.getdata())
+        
+        # Sample every 5th pixel for performance (like the JS version)
+        sampled_pixels = pixels[::5]
+        
+        if not sampled_pixels:
+            return (128, 128, 128)  # Default gray
+            
+        # Calculate averages
+        r_total = sum(pixel[0] for pixel in sampled_pixels)
+        g_total = sum(pixel[1] for pixel in sampled_pixels)
+        b_total = sum(pixel[2] for pixel in sampled_pixels)
+        
+        count = len(sampled_pixels)
+        avg_r = r_total // count
+        avg_g = g_total // count
+        avg_b = b_total // count
+        
+        return (avg_r, avg_g, avg_b)
+
+    def build_cape_from_image(self, input_img):
+        """Build a single cape texture from a PIL Image"""
+        # Set scale to maximum (6)
+        self.set_scale(6)
+        
+        # Create the cape canvas (64x32 at max scale)
+        canvas_width = 64 * self.actual_scale
+        canvas_height = 32 * self.actual_scale
+        cape_canvas = Image.new('RGBA', (canvas_width, canvas_height), (0, 0, 0, 0))
+        
+        # Convert to RGBA for consistency
+        if input_img.mode != 'RGBA':
+            input_img = input_img.convert('RGBA')
+        
+        # Calculate cape area dimensions (10x16 pixels at scale)
+        cape_width = 10 * self.actual_scale
+        cape_height = 16 * self.actual_scale
+        
+        # Calculate auto color if needed (from original image for fit mode)
+        if self.auto_color:
+            fill_color = self.calculate_average_color(input_img)
+        else:
+            fill_color = self.color or (128, 128, 128)
+        
+        # Process image based on selected mode
+        if self.mode == "fit":
+            cape_image = self.process_image_fit(input_img, cape_width, cape_height, fill_color)
+        else:  # default "zoom" mode
+            cape_image = self.process_image_center_zoom(input_img, cape_width, cape_height)
+        
+        # Paste the cape image onto the canvas at position (1, 1) scaled
+        cape_canvas.paste(cape_image, (1 * self.actual_scale, 1 * self.actual_scale))
+        
+        # Create drawing context
+        draw = ImageDraw.Draw(cape_canvas)
+        
+        # Helper function to draw filled rectangles
+        def fill_rect(x, y, w, h):
+            x1 = x * self.actual_scale
+            y1 = y * self.actual_scale
+            x2 = x1 + w * self.actual_scale
+            y2 = y1 + h * self.actual_scale
+            draw.rectangle([x1, y1, x2-1, y2-1], fill=fill_color)
+        
+        # Draw cape borders and back
+        fill_rect(0, 1, 1, 16)   # Left border
+        fill_rect(1, 0, 10, 1)   # Top border
+        fill_rect(11, 1, 1, 16)  # Right border
+        fill_rect(1, 17, 10, 1)  # Bottom border
+        fill_rect(12, 1, 10, 16) # Back of cape
+        
+        # Draw elytra if enabled
+        if self.elytra_image:
+            # Paste the same image for elytra (36, 2, 10x20)
+            elytra_width = 10 * self.actual_scale
+            elytra_height = 20 * self.actual_scale
+            
+            # Process elytra image using the same mode as cape
+            if self.mode == "fit":
+                elytra_image = self.process_image_fit(input_img, elytra_width, elytra_height, fill_color)
+            else:  # "zoom" mode
+                # Use existing zoom logic for elytra
+                elytra_img_ratio = input_img.width / input_img.height
+                elytra_area_ratio = elytra_width / elytra_height
+                
+                if elytra_img_ratio > elytra_area_ratio:
+                    # Fit to width
+                    elytra_new_width = elytra_width
+                    elytra_new_height = int(elytra_width / elytra_img_ratio)
+                else:
+                    # Fit to height
+                    elytra_new_height = elytra_height
+                    elytra_new_width = int(elytra_height * elytra_img_ratio)
+                
+                elytra_resized = input_img.resize((elytra_new_width, elytra_new_height), Image.Resampling.LANCZOS)
+                
+                # Center in elytra area
+                elytra_x_offset = (elytra_width - elytra_new_width) // 2
+                elytra_y_offset = (elytra_height - elytra_new_height) // 2
+                
+                elytra_image = Image.new('RGBA', (elytra_width, elytra_height), (0, 0, 0, 0))
+                elytra_image.paste(elytra_resized, (elytra_x_offset, elytra_y_offset))
+            
+            cape_canvas.paste(elytra_image, (36 * self.actual_scale, 2 * self.actual_scale))
+        
+        # Draw elytra borders and details only if elytra is enabled
+        if self.elytra_image:
+            fill_rect(22, 11, 1, 11)  # Inside wing
+            fill_rect(31, 0, 3, 1)    # Shoulder
+            fill_rect(32, 1, 2, 1)    # Shoulder
+            fill_rect(34, 0, 6, 1)    # Bottom
+            fill_rect(34, 2, 1, 2)    # Outside wing
+            fill_rect(35, 2, 1, 9)    # Outside wing
+            
+            # Helper function to clear rectangles (make transparent)
+            def clear_rect(x, y, w, h):
+                x1 = x * self.actual_scale
+                y1 = y * self.actual_scale
+                x2 = x1 + w * self.actual_scale
+                y2 = y1 + h * self.actual_scale
+                
+                # Paste transparent over the area
+                transparent_patch = Image.new('RGBA', (w * self.actual_scale, h * self.actual_scale), (0, 0, 0, 0))
+                cape_canvas.paste(transparent_patch, (x1, y1))
+            
+            # Remove elytra parts (make transparent)
+            clear_rect(36, 16, 1, 6)  # Bottom left
+            clear_rect(37, 19, 1, 3)  # Bottom left
+            clear_rect(38, 21, 1, 1)  # Bottom left
+            clear_rect(42, 2, 1, 1)   # Top right
+            clear_rect(43, 2, 1, 2)   # Top right
+            clear_rect(44, 2, 1, 5)   # Top right
+            clear_rect(45, 2, 1, 9)   # Top right
+        
+        # If elytra is disabled, remove the right half by making all colored pixels transparent
+        if not self.elytra_image:
+            self.clear_right_half_pixels(cape_canvas)
+        
+        return cape_canvas
+
+    def build_cape_from_gif(self, gif_image):
+        """Build cape texture from GIF by processing each frame separately"""
+        try:
+            # If the input is a file stream, read it into memory
+            if hasattr(gif_image, 'fp') and hasattr(gif_image.fp, 'read'):
+                # Read the entire file content into memory
+                gif_image.fp.seek(0)
+                gif_data = gif_image.fp.read()
+                gif_image = Image.open(io.BytesIO(gif_data))
+            
+            # Extract all frames first to know total count
+            frames = []
+            frame_count = 0
+            
+            try:
+                while True:
+                    # Copy the current frame
+                    frame = gif_image.copy()
+                    # Convert to RGBA to ensure consistent format
+                    if frame.mode != 'RGBA':
+                        frame = frame.convert('RGBA')
+                    frames.append(frame)
+                    frame_count += 1
+                    
+                    # Move to next frame
+                    gif_image.seek(gif_image.tell() + 1)
+            except EOFError:
+                # End of GIF reached
+                pass
+            
+            if not frames:
+                raise ValueError("No frames found in the GIF")
+            
+            print(f"Extracted {frame_count} frames from the GIF")
+            
+            # Process each frame as a separate cape
+            cape_textures = []
+            for i, frame in enumerate(frames):
+                print(f"Processing frame {i + 1}/{len(frames)} as cape texture...")
+                
+                # Calculate progress for frontend
+                progress_percentage = int((i / len(frames)) * 80) + 10  # 10-90% for processing
+                
+                cape_texture = self.build_cape_from_image(frame)
+                if cape_texture:
+                    cape_textures.append(cape_texture)
+                else:
+                    print(f"Warning: Failed to process frame {i + 1}")
+            
+            if not cape_textures:
+                raise ValueError("No cape textures could be created from GIF frames")
+            
+            print("Stacking cape textures vertically...")
+            
+            # Stack all cape textures vertically
+            cape_width = cape_textures[0].width
+            cape_height = cape_textures[0].height
+            total_height = cape_height * len(cape_textures)
+            
+            # Create final canvas
+            final_canvas = Image.new('RGBA', (cape_width, total_height), (0, 0, 0, 0))
+            
+            # Paste each cape texture vertically
+            current_y = 0
+            for i, cape_texture in enumerate(cape_textures):
+                final_canvas.paste(cape_texture, (0, current_y))
+                current_y += cape_height
+                print(f"Stacked cape texture {i + 1}/{len(cape_textures)}")
+            
+            print(f"Created final texture with {len(cape_textures)} cape textures stacked vertically")
+            return final_canvas, {
+                'frame_count': len(cape_textures),
+                'frame_width': cape_width,
+                'frame_height': cape_height,
+                'is_animated': True,
+                'total_frames': frame_count  # Add original frame count for progress tracking
+            }
+            
+        except Exception as e:
+            print(f"Error processing GIF: {str(e)}")
+            return None, None
+    
+    def clear_right_half_pixels(self, image):
+        """Remove the right half by making all colored pixels transparent (alpha = 0)"""
+        width, height = image.size
+        right_half_start = width // 2  # Start of right half
+        
+        # Load pixel data for direct manipulation
+        pixels = image.load()
+        
+        # Process each pixel in the right half
+        for x in range(right_half_start, width):
+            for y in range(height):
+                # Get current pixel (R, G, B, A)
+                pixel = pixels[x, y]
+                # Set to fully transparent (keep RGB but set alpha to 0)
+                pixels[x, y] = (pixel[0], pixel[1], pixel[2], 0)
+    
+    def process_image_center_zoom(self, input_img, cape_width, cape_height):
+        """Process image in center-zoom mode: crop and zoom to fill the cape area perfectly"""
+        img_ratio = input_img.width / input_img.height
+        cape_ratio = cape_width / cape_height
+        
+        if img_ratio > cape_ratio:
+            # Image is wider - crop from center horizontally and scale to fill height
+            scale_factor = cape_height / input_img.height
+            scaled_width = int(input_img.width * scale_factor)
+            scaled_height = cape_height
+            
+            # Resize to fill height
+            resized_img = input_img.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+            
+            # Crop from center horizontally
+            crop_x = (scaled_width - cape_width) // 2
+            cropped_img = resized_img.crop((crop_x, 0, crop_x + cape_width, cape_height))
+        else:
+            # Image is taller - crop from center vertically and scale to fill width
+            scale_factor = cape_width / input_img.width
+            scaled_width = cape_width
+            scaled_height = int(input_img.height * scale_factor)
+            
+            # Resize to fill width
+            resized_img = input_img.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+            
+            # Crop from center vertically
+            crop_y = (scaled_height - cape_height) // 2
+            cropped_img = resized_img.crop((0, crop_y, cape_width, crop_y + cape_height))
+        
+        return cropped_img
+    
+    def process_image_fit(self, input_img, cape_width, cape_height, fill_color):
+        """Process image in fit mode: scale to fit entirely inside with color fill for empty areas"""
+        img_ratio = input_img.width / input_img.height
+        cape_ratio = cape_width / cape_height
+        
+        # Create background filled with the color
+        background = Image.new('RGBA', (cape_width, cape_height), fill_color + (255,))  # Add alpha channel
+        
+        if img_ratio > cape_ratio:
+            # Image is wider - fit to width, center vertically
+            new_width = cape_width
+            new_height = int(cape_width / img_ratio)
+            
+            # Resize image to fit
+            resized_img = input_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Center vertically
+            y_offset = (cape_height - new_height) // 2
+            background.paste(resized_img, (0, y_offset), resized_img if resized_img.mode == 'RGBA' else None)
+        else:
+            # Image is taller or square - fit to height, center horizontally
+            new_height = cape_height
+            new_width = int(cape_height * img_ratio)
+            
+            # Resize image to fit
+            resized_img = input_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Center horizontally
+            x_offset = (cape_width - new_width) // 2
+            background.paste(resized_img, (x_offset, 0), resized_img if resized_img.mode == 'RGBA' else None)
+        
+        return background
 
 def check_auth():
     """Check if user is authenticated and session hasn't expired"""
@@ -1190,6 +1524,339 @@ def api_check_cape(player_name):
         'cape_url': f'/cape/{uuid}' if cape_exists else None
     })
 
+@app.route('/api/delete_cape', methods=['POST'])
+def api_delete_cape():
+    """API endpoint to delete a player's cape with authentication and TOTP."""
+    print("🔌 API cape delete request received")
+    
+    # Get form data
+    player_name = request.form.get('player_name', '').strip()
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '').strip()
+    totp_token = request.form.get('totp', '').strip()
+    
+    # Validate required parameters
+    if not all([player_name, username, password, totp_token]):
+        print("❌ API request missing required parameters")
+        return jsonify({
+            'success': False, 
+            'error': 'Missing required parameters: player_name, username, password, totp'
+        }), 400
+    
+    # Verify credentials
+    if username not in LOGIN_CREDENTIALS or LOGIN_CREDENTIALS[username] != password:
+        print(f"❌ API authentication failed for username: {username}")
+        return jsonify({
+            'success': False, 
+            'error': 'Invalid username or password'
+        }), 401
+    
+    # Verify TOTP
+    if not verify_totp(username, totp_token):
+        print(f"❌ API TOTP verification failed for user: {username}")
+        return jsonify({
+            'success': False, 
+            'error': 'Invalid TOTP token'
+        }), 401
+    
+    print(f"✅ API authentication successful for user: {username}")
+    print(f"🗑️ API deleting cape for player: {player_name}")
+    
+    # Get UUID from player name
+    uuid = get_uuid_from_playername(player_name)
+    if not uuid:
+        print(f"❌ Player {player_name} not found via Mojang API")
+        return jsonify({
+            'success': False,
+            'error': f'Player "{player_name}" not found'
+        }), 404
+    
+    # Check if cape exists
+    cape_path = os.path.join(CAPES_DIR, uuid)
+    metadata_path = cape_path + '.meta'
+    
+    if not os.path.exists(cape_path):
+        print(f"❌ No cape found for player: {player_name} (UUID: {uuid})")
+        return jsonify({
+            'success': False,
+            'error': f'No cape found for player "{player_name}"'
+        }), 404
+    
+    try:
+        # Delete cape file
+        os.remove(cape_path)
+        print(f"✅ Deleted cape file: {cape_path}")
+        
+        # Delete metadata file if it exists
+        if os.path.exists(metadata_path):
+            os.remove(metadata_path)
+            print(f"✅ Deleted metadata file: {metadata_path}")
+        
+        # Clear cache for this UUID
+        with cache_lock:
+            if uuid in player_name_cache:
+                del player_name_cache[uuid]
+                print(f"✅ Cleared cache for UUID: {uuid}")
+        
+        print(f"✅ API cape deletion successful for player: {player_name}")
+        return jsonify({
+            'success': True,
+            'message': f'Cape deleted successfully for player "{player_name}"',
+            'player_name': player_name,
+            'uuid': uuid
+        })
+        
+    except Exception as e:
+        print(f"❌ Error deleting cape for {player_name}: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'Error deleting cape: {str(e)}'
+        }), 500
+
+@app.route('/cape_creator_preview', methods=['POST'])
+def cape_creator_preview():
+    """Preview cape creation from uploaded image or URL."""
+    try:
+        mode = request.form.get('mode', 'zoom')  # 'zoom' or 'fit'
+        elytra = request.form.get('elytra') == 'true'
+        
+        creator = MinecraftCapeCreator()
+        creator.set_mode(mode)
+        creator.set_elytra_enabled(elytra)
+        
+        # Handle input source (URL or upload)
+        input_source = request.form.get('input_source', 'upload')
+        is_gif = False
+        
+        if input_source == 'url':
+            image_url = request.form.get('image_url', '').strip()
+            if not image_url:
+                return jsonify({'success': False, 'error': 'Please enter an image URL.'})
+            
+            # Download image from URL
+            try:
+                response = requests.get(image_url, timeout=10, stream=True)
+                response.raise_for_status()
+                
+                # Check content type
+                content_type = response.headers.get('content-type', '')
+                if not content_type.startswith('image/'):
+                    return jsonify({'success': False, 'error': 'URL does not point to an image.'})
+                
+                # Check if it's a GIF
+                is_gif = content_type == 'image/gif'
+                
+                # Open image from response content
+                input_img = Image.open(io.BytesIO(response.content))
+                
+            except requests.RequestException as e:
+                return jsonify({'success': False, 'error': f'Error downloading image: {str(e)}'})
+            except Exception as e:
+                return jsonify({'success': False, 'error': f'Error processing image: {str(e)}'})
+        
+        else:  # upload
+            if 'image_file' not in request.files:
+                return jsonify({'success': False, 'error': 'No image file uploaded.'})
+            
+            file = request.files['image_file']
+            if file.filename == '':
+                return jsonify({'success': False, 'error': 'No image file selected.'})
+            
+            # Check file type
+            if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                return jsonify({'success': False, 'error': 'Only PNG, JPG, JPEG, and GIF files are allowed.'})
+            
+            # Check if it's a GIF
+            is_gif = file.filename.lower().endswith('.gif')
+            
+            try:
+                # Read file content into memory for better handling
+                file.stream.seek(0)
+                file_content = file.stream.read()
+                input_img = Image.open(io.BytesIO(file_content))
+            except Exception as e:
+                return jsonify({'success': False, 'error': f'Error processing image: {str(e)}'})
+        
+        # Create cape - handle GIF vs static image
+        if is_gif:
+            cape_image, metadata = creator.build_cape_from_gif(input_img)
+            if not cape_image:
+                return jsonify({'success': False, 'error': 'Failed to create cape texture from GIF.'})
+        else:
+            cape_image = creator.build_cape_from_image(input_img)
+            metadata = None
+            if not cape_image:
+                return jsonify({'success': False, 'error': 'Failed to create cape texture.'})
+        
+        # Convert cape image to base64 for preview
+        buffer = io.BytesIO()
+        cape_image.save(buffer, format='PNG')
+        buffer.seek(0)
+        cape_base64 = base64.b64encode(buffer.getvalue()).decode()
+        
+        # Add info about animation
+        animation_info = ""
+        if metadata and metadata.get('is_animated'):
+            animation_info = f" (Animated: {metadata['frame_count']} frames)"
+        
+        return jsonify({
+            'success': True,
+            'preview_image': f'data:image/png;base64,{cape_base64}',
+            'mode': mode,
+            'elytra': elytra,
+            'is_animated': bool(metadata and metadata.get('is_animated')),
+            'animation_info': animation_info
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in cape creator preview: {str(e)}")
+        return jsonify({'success': False, 'error': f'An error occurred: {str(e)}'})
+
+@app.route('/cape_creator_create', methods=['POST'])
+def cape_creator_create():
+    """Create and save cape from cape creator."""
+    try:
+        # Check TOTP verification - either session-based or form-based
+        totp_token = request.form.get('totp_token', '').strip()
+        
+        if totp_token:
+            # Direct TOTP verification from form
+            username = session.get('username')
+            if not username:
+                return jsonify({'success': False, 'error': 'Not authenticated.'})
+            
+            if not verify_totp(username, totp_token):
+                return jsonify({'success': False, 'error': 'Invalid TOTP token.'})
+        else:
+            # Session-based TOTP verification
+            if not require_totp_for_edit():
+                return jsonify({'success': False, 'error': 'TOTP verification required for editing operations.', 'require_totp': True})
+        
+        player_name = request.form.get('player_name', '').strip()
+        if not player_name:
+            return jsonify({'success': False, 'error': 'Please enter a player name.'})
+        
+        # Get player UUID
+        uuid = get_uuid_from_playername(player_name)
+        if not uuid:
+            return jsonify({'success': False, 'error': f'Player "{player_name}" not found. Please check the spelling.'})
+        
+        mode = request.form.get('mode', 'zoom')
+        elytra = request.form.get('elytra') == 'true'
+        
+        creator = MinecraftCapeCreator()
+        creator.set_mode(mode)
+        creator.set_elytra_enabled(elytra)
+        
+        # Handle input source (URL or upload)
+        input_source = request.form.get('input_source', 'upload')
+        is_gif = False
+        
+        if input_source == 'url':
+            image_url = request.form.get('image_url', '').strip()
+            if not image_url:
+                return jsonify({'success': False, 'error': 'Please enter an image URL.'})
+            
+            try:
+                response = requests.get(image_url, timeout=10, stream=True)
+                response.raise_for_status()
+                
+                content_type = response.headers.get('content-type', '')
+                if not content_type.startswith('image/'):
+                    return jsonify({'success': False, 'error': 'URL does not point to an image.'})
+                
+                # Check if it's a GIF
+                is_gif = content_type == 'image/gif'
+                
+                input_img = Image.open(io.BytesIO(response.content))
+                
+            except requests.RequestException as e:
+                return jsonify({'success': False, 'error': f'Error downloading image: {str(e)}'})
+            except Exception as e:
+                return jsonify({'success': False, 'error': f'Error processing image: {str(e)}'})
+        
+        else:  # upload
+            if 'image_file' not in request.files:
+                return jsonify({'success': False, 'error': 'No image file uploaded.'})
+            
+            file = request.files['image_file']
+            if file.filename == '':
+                return jsonify({'success': False, 'error': 'No image file selected.'})
+            
+            if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                return jsonify({'success': False, 'error': 'Only PNG, JPG, JPEG, and GIF files are allowed.'})
+            
+            # Check if it's a GIF
+            is_gif = file.filename.lower().endswith('.gif')
+            
+            try:
+                # Read file content into memory for better handling
+                file.stream.seek(0)
+                file_content = file.stream.read()
+                input_img = Image.open(io.BytesIO(file_content))
+            except Exception as e:
+                return jsonify({'success': False, 'error': f'Error processing image: {str(e)}'})
+        
+        # Create cape - handle GIF vs static image
+        metadata = None
+        if is_gif:
+            cape_image, metadata = creator.build_cape_from_gif(input_img)
+            if not cape_image:
+                return jsonify({'success': False, 'error': 'Failed to create cape texture from GIF.'})
+        else:
+            cape_image = creator.build_cape_from_image(input_img)
+            if not cape_image:
+                return jsonify({'success': False, 'error': 'Failed to create cape texture.'})
+        
+        # Save the cape
+        os.makedirs(CAPES_DIR, exist_ok=True)
+        cape_path = os.path.join(CAPES_DIR, uuid)
+        metadata_path = cape_path + '.meta'
+        
+        # Remove old metadata file if it exists
+        if os.path.exists(metadata_path):
+            os.remove(metadata_path)
+        
+        cape_image.save(cape_path, 'PNG')
+        
+        # Save metadata if this is an animated cape
+        if metadata and metadata.get('is_animated'):
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f)
+            try:
+                os.chmod(metadata_path, 0o644)
+            except OSError:
+                pass
+        
+        # Set file permissions
+        try:
+            os.chmod(cape_path, 0o644)
+        except OSError:
+            pass  # Skip if on Windows or permission error
+        
+        # Clear cache for this UUID
+        with cache_lock:
+            if uuid in player_name_cache:
+                del player_name_cache[uuid]
+        
+        mode_desc = "fill mode" if mode == "fit" else "zoom mode"
+        elytra_desc = "with elytra" if elytra else "without elytra"
+        animation_desc = ""
+        if metadata and metadata.get('is_animated'):
+            animation_desc = f" (animated with {metadata['frame_count']} frames)"
+        
+        return jsonify({
+            'success': True,
+            'message': f'Cape created successfully for "{player_name}" using {mode_desc} {elytra_desc}{animation_desc}!',
+            'player_name': player_name,
+            'uuid': uuid,
+            'is_animated': bool(metadata and metadata.get('is_animated'))
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in cape creator create: {str(e)}")
+        return jsonify({'success': False, 'error': f'An error occurred: {str(e)}'})
+
 if __name__ == '__main__':
     # Create templates directory and template file
     os.makedirs('templates', exist_ok=True)
@@ -1788,6 +2455,41 @@ if __name__ == '__main__':
             box-shadow: 0 6px 20px rgba(99, 110, 114, 0.4);
         }
         
+        /* Progress Bar Styles */
+        .progress-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00b894, #00cec9);
+            border-radius: 4px;
+            width: 0%;
+            transition: width 0.3s ease;
+            animation: progressPulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes progressPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .progress-text {
+            color: #00cec9;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+        
         .overwrite-section {
             background: #ff7675;
             border-radius: 10px;
@@ -1932,6 +2634,16 @@ if __name__ == '__main__':
             box-shadow: 0 4px 15px rgba(255, 118, 117, 0.4);
         }
         
+        .view-btn {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+        }
+        
+        .view-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(52, 152, 219, 0.4);
+        }
+        
         .duplicate-btn {
             background: linear-gradient(135deg, #fdcb6e, #e17055);
             color: white;
@@ -2049,10 +2761,9 @@ if __name__ == '__main__':
         <div class="header-buttons">
             <button class="header-btn" onclick="showUrlDownloadModal()">🌐 Download from URL</button>
             <button class="header-btn" onclick="showGifUploadModal()">🎞️ Upload GIF Cape</button>
-            <button class="header-btn" onclick="window.open('https://misterlauncher.org/capes/', '_blank')">🎨 HD Capes</button>
-            <button class="header-btn" onclick="window.open('https://minecraftcapes.net/gallery/', '_blank')">🎞️ Animated Capes</button>
-            <button class="header-btn" onclick="window.open('https://skinmc.net/capes', '_blank')">📋 Standard Capes</button>
-            <a href="/setup_totp" class="header-btn" style="text-decoration: none;">📱 Setup TOTP</a>
+            <button class="header-btn" onclick="window.open('https://misterlauncher.org/capes/', '_blank')">🎨 MisterLauncher</button>
+            <button class="header-btn" onclick="window.open('https://minecraftcapes.net/gallery/', '_blank')">🎞️ MinecraftCapes.net</button>
+            <button class="header-btn" onclick="window.open('https://skinmc.net/capes', '_blank')">📋 SkinMC</button>
             <a href="/logout" class="header-btn" style="text-decoration: none;">🚪 Logout</a>
         </div>
         
@@ -2106,6 +2817,97 @@ if __name__ == '__main__':
             </div>
         </div>
         
+        <!-- Cape Creator Section -->
+        <div class="upload-section" style="margin-top: 20px;">
+            <h3 style="margin-top: 0; color: white;">🎨 Cape Creator</h3>
+            <p style="color: rgba(255,255,255,0.9); margin-bottom: 20px;">Create custom cape textures from any image with fit/fill options and elytra support.</p>
+            
+            <div id="capeCreatorStep1" class="upload-step active">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
+                    <div>
+                        <label style="color: white; display: block; margin-bottom: 8px;">📥 Input Source:</label>
+                        <div style="display: flex; gap: 10px;">
+                            <label style="color: white; display: flex; align-items: center; gap: 5px;">
+                                <input type="radio" name="cape_input_source" value="upload" checked onchange="toggleCapeInputSource()">
+                                Upload File
+                            </label>
+                            <label style="color: white; display: flex; align-items: center; gap: 5px;">
+                                <input type="radio" name="cape_input_source" value="url" onchange="toggleCapeInputSource()">
+                                Image URL
+                            </label>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="color: white; display: block; margin-bottom: 8px;">⚙️ Processing Mode:</label>
+                        <div style="display: flex; gap: 10px;">
+                            <label style="color: white; display: flex; align-items: center; gap: 5px;">
+                                <input type="radio" name="cape_mode" value="zoom" checked>
+                                Fill (Crop to fit)
+                            </label>
+                            <label style="color: white; display: flex; align-items: center; gap: 5px;">
+                                <input type="radio" name="cape_mode" value="fit">
+                                Fit (Scale to fit)
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="capeUploadInput" style="margin-bottom: 15px;">
+                    <label style="color: white; display: block; margin-bottom: 8px;">🖼️ Select Image:</label>
+                    <input type="file" id="cape_creator_file" accept=".png,.jpg,.jpeg,.gif" 
+                           style="padding: 8px; border: none; border-radius: 6px; background: rgba(255,255,255,0.9);">
+                </div>
+                
+                <div id="capeUrlInput" style="margin-bottom: 15px; display: none;">
+                    <label style="color: white; display: block; margin-bottom: 8px;">🔗 Image URL:</label>
+                    <input type="url" id="cape_creator_url" placeholder="https://example.com/image.png"
+                           style="width: 100%; padding: 8px; border: none; border-radius: 6px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="color: white; display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="cape_elytra_enabled">
+                        🦅 Include Elytra Wings
+                    </label>
+                </div>
+                
+                <button type="button" onclick="previewCapeCreator()" class="upload-btn">
+                    👁️ Preview Cape
+                </button>
+                
+                <!-- Progress Bar -->
+                <div id="cape-creator-progress" class="progress-container" style="display: none;">
+                    <div class="progress-bar">
+                        <div id="cape-creator-progress-fill" class="progress-fill"></div>
+                    </div>
+                    <div id="cape-creator-progress-text" class="progress-text">Processing...</div>
+                </div>
+            </div>
+            
+            <!-- Step 2: Cape Creator Preview -->
+            <div id="capeCreatorStep2" class="upload-step">
+                <h3 style="margin-top: 15px; margin-bottom: 10px; color: white;">🎨 Cape Preview</h3>
+                <div class="preview-section">
+                    <div class="cape-preview">
+                        <img id="cape-creator-preview-img" src="" alt="Cape Preview" style="max-width: 300px;">
+                        <div id="cape-creator-settings" style="color: white; margin-top: 10px; font-size: 0.9em;"></div>
+                    </div>
+                    <div class="upload-details">
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label style="color: white; margin-bottom: 5px; display: block;">🎯 Assign to Player:</label>
+                            <input type="text" id="cape_creator_player_name" 
+                                   placeholder="Enter Minecraft username" required
+                                   style="width: 100%; padding: 12px; border: none; border-radius: 6px;">
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="button" class="back-btn" onclick="goBackToCapeCreator()">⬅️ Back</button>
+                            <button type="button" onclick="createCape()" class="upload-btn">✅ Create Cape</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- Search Section -->
         <div class="search-section">
             <input type="text" id="search-bar" class="search-bar" placeholder="🔍 Search players by name or UUID..." 
@@ -2129,6 +2931,9 @@ if __name__ == '__main__':
                     <div class="player-uuid">({{ cape.uuid }})</div>
                     
                     <div class="cape-actions">
+                        <a href="https://voidcube.de/capes/{{ cape.uuid }}" target="_blank" class="action-btn view-btn">
+                            👁️ View Cape
+                        </a>
                         <button class="action-btn duplicate-btn" onclick="showTotpModal('duplicate', '{{ cape.uuid }}', '{{ cape.player_name }}')">
                             📋 Duplicate
                         </button>
@@ -2824,6 +3629,390 @@ window.onclick = function(event) {
         closeTOTPModal();
     }
 }
+
+// Cape Creator Functions
+function toggleCapeInputSource() {
+    const uploadRadio = document.querySelector('input[name="cape_input_source"][value="upload"]');
+    const uploadDiv = document.getElementById('capeUploadInput');
+    const urlDiv = document.getElementById('capeUrlInput');
+    
+    if (uploadRadio.checked) {
+        uploadDiv.style.display = 'block';
+        urlDiv.style.display = 'none';
+    } else {
+        uploadDiv.style.display = 'none';
+        urlDiv.style.display = 'block';
+    }
+}
+
+function previewCapeCreator() {
+    const inputSource = document.querySelector('input[name="cape_input_source"]:checked').value;
+    const mode = document.querySelector('input[name="cape_mode"]:checked').value;
+    const elytra = document.getElementById('cape_elytra_enabled').checked;
+    
+    const formData = new FormData();
+    formData.append('input_source', inputSource);
+    formData.append('mode', mode);
+    formData.append('elytra', elytra);
+    
+    let isGif = false;
+    let estimatedFrames = 1;
+    
+    if (inputSource === 'upload') {
+        const fileInput = document.getElementById('cape_creator_file');
+        if (!fileInput.files[0]) {
+            alert('Please select an image file.');
+            return;
+        }
+        const fileName = fileInput.files[0].name.toLowerCase();
+        isGif = fileName.endsWith('.gif');
+        // Estimate frames based on file size for GIFs (rough estimate)
+        if (isGif) {
+            const fileSize = fileInput.files[0].size;
+            estimatedFrames = Math.max(1, Math.min(50, Math.floor(fileSize / 50000))); // Rough estimate
+        }
+        formData.append('image_file', fileInput.files[0]);
+    } else {
+        const urlInput = document.getElementById('cape_creator_url');
+        if (!urlInput.value.trim()) {
+            alert('Please enter an image URL.');
+            return;
+        }
+        const url = urlInput.value.trim().toLowerCase();
+        isGif = url.includes('.gif');
+        estimatedFrames = isGif ? 10 : 1; // Default estimate for URL GIFs
+        formData.append('image_url', urlInput.value.trim());
+    }
+    
+    // Show progress bar with initial state
+    showCapeProgress(isGif ? 'Analyzing GIF...' : 'Processing image...', 5);
+    
+    // Start progress simulation
+    const progressInterval = simulateGifProgress(isGif, estimatedFrames);
+    
+    // Show loading state
+    const previewBtn = event.target;
+    const originalText = previewBtn.textContent;
+    previewBtn.textContent = '⏳ Creating Preview...';
+    previewBtn.disabled = true;
+    
+    fetch('/cape_creator_preview', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        previewBtn.textContent = originalText;
+        previewBtn.disabled = false;
+        
+        // Clear progress simulation
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        
+        if (data.success) {
+            updateCapeProgress('Preview ready!', 100);
+            
+            // Show preview
+            document.getElementById('cape-creator-preview-img').src = data.preview_image;
+            
+            // Show settings
+            const modeText = data.mode === 'fit' ? 'Fit (Scale to fit)' : 'Fill (Crop to fit)';
+            const elytraText = data.elytra ? 'With Elytra' : 'Without Elytra';
+            const animationText = data.animation_info || '';
+            document.getElementById('cape-creator-settings').innerHTML = 
+                `⚙️ Mode: ${modeText}<br>🦅 ${elytraText}${animationText}`;
+            
+            // Hide progress after short delay
+            setTimeout(() => {
+                hideCapeProgress();
+            }, 1500);
+            
+            // Switch to step 2
+            document.getElementById('capeCreatorStep1').style.display = 'none';
+            document.getElementById('capeCreatorStep2').style.display = 'block';
+            
+            // Focus on player name and scroll
+            document.getElementById('cape_creator_player_name').focus();
+            document.getElementById('capeCreatorStep2').scrollIntoView({ behavior: 'smooth' });
+        } else {
+            hideCapeProgress();
+            alert('Error: ' + data.error);
+        }
+    })
+    .catch(error => {
+        previewBtn.textContent = originalText;
+        previewBtn.disabled = false;
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        hideCapeProgress();
+        console.error('Error:', error);
+        alert('An error occurred while creating the preview.');
+    });
+}
+
+function goBackToCapeCreator() {
+    document.getElementById('capeCreatorStep2').style.display = 'none';
+    document.getElementById('capeCreatorStep1').style.display = 'block';
+}
+
+function createCape() {
+    const playerName = document.getElementById('cape_creator_player_name').value.trim();
+    if (!playerName) {
+        alert('Please enter a player name.');
+        return;
+    }
+    
+    const inputSource = document.querySelector('input[name="cape_input_source"]:checked').value;
+    const mode = document.querySelector('input[name="cape_mode"]:checked').value;
+    const elytra = document.getElementById('cape_elytra_enabled').checked;
+    
+    const formData = new FormData();
+    formData.append('player_name', playerName);
+    formData.append('input_source', inputSource);
+    formData.append('mode', mode);
+    formData.append('elytra', elytra);
+    
+    let isGif = false;
+    let estimatedFrames = 1;
+    
+    if (inputSource === 'upload') {
+        const fileInput = document.getElementById('cape_creator_file');
+        const fileName = fileInput.files[0].name.toLowerCase();
+        isGif = fileName.endsWith('.gif');
+        if (isGif) {
+            const fileSize = fileInput.files[0].size;
+            estimatedFrames = Math.max(1, Math.min(50, Math.floor(fileSize / 50000)));
+        }
+        formData.append('image_file', fileInput.files[0]);
+    } else {
+        const urlInput = document.getElementById('cape_creator_url');
+        const url = urlInput.value.trim().toLowerCase();
+        isGif = url.includes('.gif');
+        estimatedFrames = isGif ? 10 : 1;
+        formData.append('image_url', urlInput.value.trim());
+    }
+    
+    // Show progress bar
+    showCapeProgress(isGif ? 'Processing GIF frames...' : 'Creating cape...', 5);
+    
+    // Start progress simulation
+    const progressInterval = simulateGifProgress(isGif, estimatedFrames);
+    
+    // Show loading state
+    const createBtn = event.target;
+    const originalText = createBtn.textContent;
+    createBtn.textContent = '⏳ Creating Cape...';
+    createBtn.disabled = true;
+    
+    fetch('/cape_creator_create', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        createBtn.textContent = originalText;
+        createBtn.disabled = false;
+        
+        // Clear progress simulation
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        
+        if (data.success) {
+            updateCapeProgress('Cape created successfully!', 100);
+            
+            setTimeout(() => {
+                hideCapeProgress();
+                alert('Success: ' + data.message);
+                
+                // Reset form and go back to step 1
+                document.getElementById('capeCreatorStep2').style.display = 'none';
+                document.getElementById('capeCreatorStep1').style.display = 'block';
+                document.getElementById('cape_creator_file').value = '';
+                document.getElementById('cape_creator_url').value = '';
+                document.getElementById('cape_creator_player_name').value = '';
+                document.getElementById('cape_elytra_enabled').checked = false;
+                
+                // Refresh the page to show the new cape
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            }, 1000);
+        } else if (data.require_totp) {
+            hideCapeProgress();
+            
+            // Store the form data for after TOTP verification
+            pendingCapeCreatorData = {
+                playerName: playerName,
+                inputSource: inputSource,
+                mode: mode,
+                elytra: elytra,
+                formData: formData,
+                isGif: isGif,
+                estimatedFrames: estimatedFrames
+            };
+            
+            // Store the action for after TOTP verification
+            pendingTOTPAction = function() {
+                // Re-attempt the cape creation with TOTP token
+                executeCapeCreationWithTOTP();
+            };
+            showTOTPModal();
+        } else {
+            hideCapeProgress();
+            alert('Error: ' + data.error);
+        }
+    })
+    .catch(error => {
+        createBtn.textContent = originalText;
+        createBtn.disabled = false;
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        hideCapeProgress();
+        console.error('Error:', error);
+        alert('An error occurred while creating the cape.');
+    });
+}
+
+// Progress bar functions
+function showCapeProgress(text, percentage) {
+    const progressContainer = document.getElementById('cape-creator-progress');
+    const progressFill = document.getElementById('cape-creator-progress-fill');
+    const progressText = document.getElementById('cape-creator-progress-text');
+    
+    progressContainer.style.display = 'block';
+    progressFill.style.width = Math.min(percentage, 100) + '%';
+    progressText.textContent = text;
+}
+
+function updateCapeProgress(text, percentage) {
+    const progressFill = document.getElementById('cape-creator-progress-fill');
+    const progressText = document.getElementById('cape-creator-progress-text');
+    
+    progressFill.style.width = Math.min(percentage, 100) + '%';
+    progressText.textContent = text;
+}
+
+function hideCapeProgress() {
+    const progressContainer = document.getElementById('cape-creator-progress');
+    progressContainer.style.display = 'none';
+}
+
+function simulateGifProgress(isGif, estimatedFrames = 1) {
+    if (!isGif) {
+        // For static images, just show simple progress
+        updateCapeProgress('Processing image...', 50);
+        return;
+    }
+    
+    // For GIFs, simulate frame-by-frame progress
+    let currentFrame = 0;
+    const progressInterval = setInterval(() => {
+        currentFrame++;
+        const progress = Math.min((currentFrame / estimatedFrames) * 80 + 10, 90); // 10-90%
+        updateCapeProgress(`Processing frame ${currentFrame}/${estimatedFrames}...`, progress);
+        
+        if (currentFrame >= estimatedFrames) {
+            clearInterval(progressInterval);
+            updateCapeProgress('Finalizing cape...', 95);
+        }
+    }, 200); // Update every 200ms
+    
+    return progressInterval;
+}
+
+// Variables to store cape creator data for TOTP
+let pendingCapeCreatorData = null;
+
+// Function to execute cape creation with TOTP
+function executeCapeCreationWithTOTP() {
+    if (!pendingCapeCreatorData) {
+        alert('No pending cape creation data found.');
+        return;
+    }
+    
+    const data = pendingCapeCreatorData;
+    const formData = new FormData();
+    
+    // Add all the form data
+    formData.append('player_name', data.playerName);
+    formData.append('input_source', data.inputSource);
+    formData.append('mode', data.mode);
+    formData.append('elytra', data.elytra);
+    
+    // Add TOTP token
+    const totpToken = document.getElementById('totpToken').value;
+    formData.append('totp_token', totpToken);
+    
+    if (data.inputSource === 'upload') {
+        const fileInput = document.getElementById('cape_creator_file');
+        formData.append('image_file', fileInput.files[0]);
+    } else {
+        const urlInput = document.getElementById('cape_creator_url');
+        formData.append('image_url', urlInput.value.trim());
+    }
+    
+    // Show progress with authentication step
+    showCapeProgress('Authenticating and creating cape...', 10);
+    
+    // Start progress simulation for GIF processing
+    const progressInterval = simulateGifProgress(data.isGif || false, data.estimatedFrames || 1);
+    
+    fetch('/cape_creator_create', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(responseData => {
+        // Clear progress simulation
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        
+        closeTOTPModal();
+        
+        if (responseData.success) {
+            updateCapeProgress('Cape created successfully!', 100);
+            
+            setTimeout(() => {
+                hideCapeProgress();
+                alert('Success: ' + responseData.message);
+                
+                // Reset form and go back to step 1
+                document.getElementById('capeCreatorStep2').style.display = 'none';
+                document.getElementById('capeCreatorStep1').style.display = 'block';
+                document.getElementById('cape_creator_file').value = '';
+                document.getElementById('cape_creator_url').value = '';
+                document.getElementById('cape_creator_player_name').value = '';
+                document.getElementById('cape_elytra_enabled').checked = false;
+                
+                // Clear pending data
+                pendingCapeCreatorData = null;
+                
+                // Refresh the page to show the new cape
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            }, 1000);
+        } else {
+            hideCapeProgress();
+            alert('Error: ' + responseData.error);
+        }
+    })
+    .catch(error => {
+        // Clear progress simulation
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        hideCapeProgress();
+        console.error('Error:', error);
+        alert('An error occurred while creating the cape with TOTP.');
+    });
+}
+
 </script>
 </html>'''
     
