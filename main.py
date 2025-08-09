@@ -1,3 +1,5 @@
+import shutil
+
 from flask import Flask, render_template, send_file, request, redirect, flash, jsonify, session
 import os
 import requests
@@ -84,8 +86,208 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # Configuration
+# Configuration
 CAPES_DIR = "/var/www/html/capes"
+LIBRARY_DIR = os.path.join(os.path.dirname(__file__), 'library')
+LIBRARY_ANIM_DIR = os.path.join(LIBRARY_DIR, 'animations')
 PORT = 4563
+# --- Cape Library & Animation Library ---
+@app.route('/library/')
+def library_index():
+    return render_template('library/index.html')
+
+# Upload cape to library
+@app.route('/library/upload', methods=['POST'])
+def library_upload():
+    file = request.files.get('cape_file')
+    if not file or not allowed_file(file.filename):
+        flash('Invalid file type', 'error')
+        return redirect('/library/')
+    filename = secure_filename(file.filename)
+    save_path = os.path.join(LIBRARY_DIR, filename)
+    file.save(save_path)
+    # Optionally create metadata here if needed
+    flash('Cape uploaded!', 'success')
+    return redirect('/library/')
+
+# List capes in library
+@app.route('/library/api/list')
+def library_api_list():
+    capes = []
+    if os.path.exists(LIBRARY_DIR):
+        for fname in os.listdir(LIBRARY_DIR):
+            if allowed_file(fname):
+                capes.append({'filename': fname})
+    return jsonify({'capes': capes})
+
+# Serve cape image from library
+@app.route('/library/cape/<filename>')
+def library_cape_file(filename):
+    return send_file(os.path.join(LIBRARY_DIR, filename))
+
+# Move cape to library (dummy, as already in library; could move from capes dir)
+@app.route('/library/api/move', methods=['POST'])
+def library_api_move():
+    try:
+        data = request.get_json()
+        filename = data.get('filename')  # This will be like "uuid.png"
+        print(f"Moving cape: {filename}")
+        
+        # Extract UUID from filename (remove .png extension)
+        uuid = filename.replace('.png', '').replace('.gif', '')
+        
+        # Cape files are stored as just the UUID (no extension)
+        src = os.path.join(CAPES_DIR, uuid)
+        dst = os.path.join(LIBRARY_DIR, filename)  # Keep original filename with extension
+        
+        print(f"Source: {src}, exists: {os.path.exists(src)}")
+        print(f"Destination: {dst}")
+        
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+            print(f"Copied {src} to {dst}")
+            # Copy metadata if exists
+            meta_src = os.path.join(CAPES_DIR, uuid + '.meta')
+            meta_dst = os.path.splitext(dst)[0] + '.meta'
+            print(f"Looking for metadata: {meta_src}, exists: {os.path.exists(meta_src)}")
+            print(f"Metadata destination: {meta_dst}")
+            if os.path.exists(meta_src):
+                shutil.copy2(meta_src, meta_dst)
+                print(f"Copied metadata {meta_src} to {meta_dst}")
+            else:
+                print(f"No metadata found at {meta_src}")
+            return jsonify({'success': True})
+        else:
+            print(f"Source file does not exist: {src}")
+            return jsonify({'error': 'Source file not found'}), 404
+    except Exception as e:
+        print(f"Error in library_api_move: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Delete cape and metadata from library
+@app.route('/library/api/delete', methods=['POST'])
+def library_api_delete():
+    data = request.get_json()
+    filename = data.get('filename')
+    path = os.path.join(LIBRARY_DIR, filename)
+    if os.path.exists(path):
+        os.remove(path)
+    # Delete metadata if exists
+    meta_path = os.path.splitext(path)[0] + '.meta'
+    if os.path.exists(meta_path):
+        os.remove(meta_path)
+    return ('', 204)
+
+# List animations (GIFs) in library/animations
+@app.route('/library/api/animations')
+def library_api_animations():
+    anims = []
+    if os.path.exists(LIBRARY_ANIM_DIR):
+        for fname in os.listdir(LIBRARY_ANIM_DIR):
+            if fname.lower().endswith('.gif'):
+                anims.append({'filename': fname})
+    return jsonify({'animations': anims})
+
+# Serve animation GIF
+@app.route('/library/animation/<filename>')
+def library_animation_file(filename):
+    return send_file(os.path.join(LIBRARY_ANIM_DIR, filename))
+
+# Apply animation to player (dummy endpoint)
+@app.route('/library/api/apply_animation', methods=['POST'])
+def library_api_apply_animation():
+    data = request.get_json()
+    filename = data.get('filename')
+    player = data.get('player')
+    # Here you would implement logic to apply the animation to the player
+    # For now, just return success
+    return ('', 204)
+
+# Rename cape in library
+@app.route('/library/api/rename', methods=['POST'])
+def library_api_rename():
+    try:
+        data = request.get_json()
+        old_filename = data.get('oldFilename')
+        new_filename = data.get('newFilename')
+        
+        old_path = os.path.join(LIBRARY_DIR, old_filename)
+        new_path = os.path.join(LIBRARY_DIR, new_filename)
+        
+        if os.path.exists(old_path):
+            os.rename(old_path, new_path)
+            print(f"Renamed {old_path} to {new_path}")
+            # Rename metadata if exists
+            old_meta = os.path.splitext(old_path)[0] + '.meta'
+            new_meta = os.path.splitext(new_path)[0] + '.meta'
+            if os.path.exists(old_meta):
+                os.rename(old_meta, new_meta)
+                print(f"Renamed metadata {old_meta} to {new_meta}")
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'File not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Apply cape from library to player
+@app.route('/library/api/apply_cape', methods=['POST'])
+def library_api_apply_cape():
+    try:
+        data = request.get_json()
+        filename = data.get('filename')  # without extension
+        player = data.get('player')
+        
+        # Get UUID from player name
+        uuid = get_uuid_from_playername(player)
+        if not uuid:
+            return jsonify({'error': 'Player not found'}), 404
+        
+        # Find the cape file in library (try different extensions)
+        source_file = None
+        for ext in ['.png', '.gif']:
+            potential_source = os.path.join(LIBRARY_DIR, filename + ext)
+            if os.path.exists(potential_source):
+                source_file = potential_source
+                break
+        
+        if not source_file:
+            return jsonify({'error': 'Cape file not found in library'}), 404
+        
+        # Copy to capes directory with UUID as filename (no extension)
+        dest_file = os.path.join(CAPES_DIR, uuid)
+        shutil.copy2(source_file, dest_file)
+        
+        # Handle metadata
+        source_meta = os.path.splitext(source_file)[0] + '.meta'
+        dest_meta = os.path.join(CAPES_DIR, uuid + '.meta')
+        
+        if os.path.exists(source_meta):
+            # Copy metadata if it exists in library
+            shutil.copy2(source_meta, dest_meta)
+            print(f"Copied metadata {source_meta} to {dest_meta}")
+        else:
+            # Remove existing metadata if cape has no metadata
+            if os.path.exists(dest_meta):
+                os.remove(dest_meta)
+                print(f"Removed existing metadata {dest_meta} (cape has no metadata)")
+        
+        return jsonify({'success': True, 'message': f'Cape applied to {player} ({uuid})'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Get metadata for a cape in library
+@app.route('/library/api/metadata/<filename>')
+def library_api_metadata(filename):
+    try:
+        meta_path = os.path.join(LIBRARY_DIR, filename + '.meta')
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r') as f:
+                metadata = json.load(f)
+            return jsonify(metadata)
+        else:
+            return jsonify({'error': 'Metadata not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 ALLOWED_EXTENSIONS = {'png', 'gif'}
 SESSION_TIMEOUT = 600  # 10 minutes in seconds
 
@@ -1858,6 +2060,61 @@ def cape_creator_create():
         print(f"❌ Error in cape creator create: {str(e)}")
         return jsonify({'success': False, 'error': f'An error occurred: {str(e)}'})
 
+@app.route('/library/api/notes/list', methods=['GET'])
+def library_api_list_notes():
+    notes_dir = os.path.join('library', 'notes')
+    if not os.path.exists(notes_dir):
+        os.makedirs(notes_dir)
+        return jsonify({'success': True, 'players': []})
+    
+    players = []
+    for filename in os.listdir(notes_dir):
+        if filename.endswith('.txt'):
+            player_name = filename[:-4]  # Remove .txt extension
+            players.append(player_name)
+    
+    players.sort()  # Sort alphabetically
+    return jsonify({'success': True, 'players': players})
+
+@app.route('/library/api/notes/<playerName>', methods=['GET'])
+def library_api_get_notes(playerName):
+    notes_dir = os.path.join('library', 'notes')
+    if not os.path.exists(notes_dir):
+        os.makedirs(notes_dir)
+    
+    notes_file = os.path.join(notes_dir, f"{playerName}.txt")
+    if os.path.exists(notes_file):
+        with open(notes_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return jsonify({'success': True, 'content': content})
+    return jsonify({'success': True, 'content': ''})
+
+@app.route('/library/api/notes', methods=['POST'])
+def library_api_save_notes():
+    data = request.get_json()
+    player_name = data['playerName']
+    content = data['content']
+    
+    notes_dir = os.path.join('library', 'notes')
+    if not os.path.exists(notes_dir):
+        os.makedirs(notes_dir)
+    
+    notes_file = os.path.join(notes_dir, f"{player_name}.txt")
+    with open(notes_file, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    return jsonify({'success': True})
+
+@app.route('/library/api/notes/<playerName>', methods=['DELETE'])
+def library_api_delete_notes(playerName):
+    notes_dir = os.path.join('library', 'notes')
+    notes_file = os.path.join(notes_dir, f"{playerName}.txt")
+    
+    if os.path.exists(notes_file):
+        os.remove(notes_file)
+    
+    return jsonify({'success': True})
+
 if __name__ == '__main__':
     # Create templates directory and template file
     os.makedirs('templates', exist_ok=True)
@@ -1868,7 +2125,10 @@ if __name__ == '__main__':
         CAPES_DIR = os.path.join(os.getcwd(), "capes")
     
     os.makedirs(CAPES_DIR, exist_ok=True)
+    os.makedirs(LIBRARY_DIR, exist_ok=True)
+    os.makedirs(LIBRARY_ANIM_DIR, exist_ok=True)
     print(f"📁 Capes directory: {CAPES_DIR}")
+    print(f"📁 Library directory: {LIBRARY_DIR}")
     print(f"📁 Directory exists: {os.path.exists(CAPES_DIR)}")
     print(f"⏰ Session timeout: {SESSION_TIMEOUT} seconds ({SESSION_TIMEOUT/60} minutes)")
     print(f"👥 Configured users: {', '.join(LOGIN_CREDENTIALS.keys())}")
@@ -2222,7 +2482,390 @@ if __name__ == '__main__':
     with open('templates/totp_setup.html', 'w', encoding='utf-8') as f:
         f.write(totp_template)
     
-    # Create the HTML template
+    # Create the HTML template for library page
+    library_template = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cape Library</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 40px auto;
+            background: rgba(255,255,255,0.97);
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.08);
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            text-align: center;
+        }
+        .sections {
+            display: flex;
+            gap: 40px;
+        }
+        .section {
+            flex: 1;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+        }
+        .cape-list {
+            list-style: none;
+            padding: 0;
+        }
+        .cape-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .cape-actions button {
+            margin-left: 10px;
+            padding: 6px 14px;
+            border: none;
+            border-radius: 6px;
+            background: #74b9ff;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .cape-actions button.delete {
+            background: #e17055;
+        }
+        .cape-actions button.apply {
+            background: #00b894;
+        }
+        .cape-actions button:hover {
+            opacity: 0.85;
+        }
+        .cape-preview {
+            max-width: 192px;
+            max-height: 192px;
+            margin-right: 16px;
+            image-rendering: pixelated;
+        }
+        .upload-form {
+            margin-bottom: 24px;
+        }
+        .upload-form input[type="file"] {
+            margin-right: 10px;
+        }
+        .animation-preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 20px;
+        }
+        .animation-item {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            padding: 10px;
+            text-align: center;
+        }
+        .animation-item img {
+            max-width: 80px;
+            max-height: 80px;
+            display: block;
+            margin: 0 auto 8px auto;
+        }
+        .animation-item button {
+            margin-top: 6px;
+            background: #00b894;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Cape Library &amp; Animations</h1>
+        <div class="sections">
+            <!-- Cape Library Section -->
+            <div class="section" style="min-width:350px;">
+                <h2>Cape Library</h2>
+                <form class="upload-form" action="/library/upload" method="post" enctype="multipart/form-data">
+                    <input type="file" name="cape_file" accept=".png,.gif" required>
+                    <button type="submit">Upload Cape</button>
+                </form>
+                <ul class="cape-list" id="capeLibraryList">
+                    <!-- Capes will be loaded here by JS -->
+                </ul>
+            </div>
+            <!-- Text Editor Section -->
+            <div class="section">
+                <h2>📝 Player Notes</h2>
+                <div class="notes-container" style="display: flex; height: 400px; border: 1px solid #ddd; border-radius: 4px;">
+                    <div class="notes-sidebar" style="width: 250px; border-right: 1px solid #ddd; padding: 10px; background: #f8f9fa;">
+                        <div style="margin-bottom: 15px;">
+                            <input type="text" id="newPlayerInput" placeholder="Enter new player name..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px;" onkeypress="if(event.key==='Enter') createNewPlayer()">
+                            <button onclick="createNewPlayer()" style="width: 100%; padding: 8px; background: #74b9ff; color: white; border: none; border-radius: 4px; cursor: pointer;">Add Player</button>
+                        </div>
+                        <div class="player-list" id="playerList" style="max-height: 300px; overflow-y: auto;">
+                            <!-- Player list will be populated here -->
+                        </div>
+                    </div>
+                    <div class="notes-editor" style="flex: 1; padding: 10px; display: flex; flex-direction: column;">
+                        <div class="editor-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #eee;">
+                            <span id="currentPlayerName" style="font-weight: bold; color: #333;">Select a player to view notes</span>
+                            <button onclick="deleteCurrentPlayerNotes()" id="deleteBtn" style="padding: 6px 12px; background: #e17055; color: white; border: none; border-radius: 4px; cursor: pointer; display: none;">Delete Notes</button>
+                        </div>
+                        <textarea id="playerNotesEditor" placeholder="Select a player from the list to edit notes..." style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; resize: none; font-family: monospace; background: #fff;" oninput="autoSaveNotes()" disabled></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+    // Fetch and render cape library
+    function loadCapeLibrary() {
+        fetch('/library/api/list')
+            .then(res => res.json())
+            .then(data => {
+                const list = document.getElementById('capeLibraryList');
+                list.innerHTML = '';
+                data.capes.forEach(cape => {
+                    const li = document.createElement('li');
+                    li.className = 'cape-item';
+                    li.innerHTML = `
+                        <div style=\"display:flex;align-items:center;\">
+                            <img src=\"/library/cape/${cape.filename}\" class=\"cape-preview\" alt=\"cape\">
+                            <span>${cape.filename}</span>
+                        </div>
+                        <div class=\"cape-actions\">
+                            <button onclick=\"renameCape('${cape.filename}')\">✏️ Rename</button>
+                            <button class=\"delete\" onclick=\"deleteCape('${cape.filename}')\">Delete</button>
+                        </div>
+                    `;
+                    list.appendChild(li);
+                });
+            });
+    }
+    
+    // Player notes functionality
+    let currentPlayer = null;
+    let saveTimeout = null;
+    
+    function loadPlayerList() {
+        fetch('/library/api/notes/list')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const playerList = document.getElementById('playerList');
+                    playerList.innerHTML = '';
+                    
+                    data.players.forEach(player => {
+                        const playerItem = document.createElement('div');
+                        playerItem.className = 'player-item';
+                        playerItem.style.cssText = 'padding: 8px; cursor: pointer; border-radius: 4px; margin-bottom: 2px; background: #fff; border: 1px solid #e0e0e0;';
+                        playerItem.textContent = player;
+                        playerItem.onclick = () => selectPlayer(player);
+                        
+                        // Hover effects
+                        playerItem.onmouseenter = () => playerItem.style.background = '#e3f2fd';
+                        playerItem.onmouseleave = () => {
+                            if (currentPlayer !== player) {
+                                playerItem.style.background = '#fff';
+                            }
+                        };
+                        
+                        playerList.appendChild(playerItem);
+                    });
+                }
+            })
+            .catch(error => console.error('Error loading player list:', error));
+    }
+    
+    function createNewPlayer() {
+        const input = document.getElementById('newPlayerInput');
+        const playerName = input.value.trim();
+        
+        if (!playerName) {
+            alert('Please enter a player name');
+            return;
+        }
+        
+        // Create empty note for the player and select them
+        selectPlayer(playerName);
+        input.value = '';
+        
+        // Refresh the player list
+        setTimeout(loadPlayerList, 100);
+    }
+    
+    function selectPlayer(playerName) {
+        // Save current player's notes if any
+        if (currentPlayer && currentPlayer !== playerName) {
+            autoSaveNotes(true); // Force save
+        }
+        
+        currentPlayer = playerName;
+        
+        // Update UI
+        document.getElementById('currentPlayerName').textContent = `Notes for: ${playerName}`;
+        document.getElementById('deleteBtn').style.display = 'block';
+        document.getElementById('playerNotesEditor').disabled = false;
+        document.getElementById('playerNotesEditor').style.background = '#fff';
+        
+        // Update player list styling
+        const playerItems = document.querySelectorAll('.player-item');
+        playerItems.forEach(item => {
+            if (item.textContent === playerName) {
+                item.style.background = '#2196f3';
+                item.style.color = 'white';
+            } else {
+                item.style.background = '#fff';
+                item.style.color = 'black';
+            }
+        });
+        
+        // Load player notes
+        fetch(`/library/api/notes/${encodeURIComponent(playerName)}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('playerNotesEditor').value = data.content;
+                } else {
+                    document.getElementById('playerNotesEditor').value = '';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading notes:', error);
+                document.getElementById('playerNotesEditor').value = '';
+            });
+    }
+    
+    function autoSaveNotes(immediate = false) {
+        if (!currentPlayer) return;
+        
+        // Clear existing timeout
+        if (saveTimeout) {
+            clearTimeout(saveTimeout);
+        }
+        
+        const saveFunction = () => {
+            const content = document.getElementById('playerNotesEditor').value;
+            
+            fetch('/library/api/notes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    playerName: currentPlayer, 
+                    content: content 
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Show brief save indicator
+                    const header = document.getElementById('currentPlayerName');
+                    const originalText = header.textContent;
+                    header.textContent = `${originalText} ✓ Saved`;
+                    header.style.color = '#00b894';
+                    
+                    setTimeout(() => {
+                        header.textContent = originalText;
+                        header.style.color = '#333';
+                    }, 1000);
+                    
+                    // Refresh player list if this is a new player
+                    if (content.trim()) {
+                        loadPlayerList();
+                    }
+                } else {
+                    console.error('Error saving notes:', data.error);
+                }
+            })
+            .catch(error => console.error('Error saving notes:', error));
+        };
+        
+        if (immediate) {
+            saveFunction();
+        } else {
+            // Auto-save after 1 second of no typing
+            saveTimeout = setTimeout(saveFunction, 1000);
+        }
+    }
+    
+    function deleteCurrentPlayerNotes() {
+        if (!currentPlayer) return;
+        
+        if (confirm(`Are you sure you want to delete all notes for ${currentPlayer}?`)) {
+            fetch(`/library/api/notes/${encodeURIComponent(currentPlayer)}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Clear editor
+                    document.getElementById('playerNotesEditor').value = '';
+                    document.getElementById('currentPlayerName').textContent = 'Select a player to view notes';
+                    document.getElementById('deleteBtn').style.display = 'none';
+                    document.getElementById('playerNotesEditor').disabled = true;
+                    document.getElementById('playerNotesEditor').style.background = '#f5f5f5';
+                    
+                    currentPlayer = null;
+                    
+                    // Refresh player list
+                    loadPlayerList();
+                } else {
+                    alert('Error deleting notes: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting notes:', error);
+                alert('Error deleting notes');
+            });
+        }
+    }
+    function moveToLibrary(filename) {
+        fetch('/library/api/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename })
+        }).then(() => loadCapeLibrary());
+    }
+    function renameCape(filename) {
+        const newName = prompt('Enter new filename (without extension):', filename.replace(/\.[^/.]+$/, ""));
+        if (!newName) return;
+        const extension = filename.split('.').pop();
+        const newFilename = newName + '.' + extension;
+        fetch('/library/api/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ oldFilename: filename, newFilename: newFilename })
+        }).then(() => loadCapeLibrary());
+    }
+    function deleteCape(filename) {
+        if (!confirm('Delete this cape and its metadata?')) return;
+        fetch('/library/api/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename })
+        }).then(() => loadCapeLibrary());
+    }
+    // Initial load
+    loadCapeLibrary();
+    loadPlayerList();
+    </script>
+</body>
+</html>'''
+    os.makedirs(os.path.join('templates', 'library'), exist_ok=True)
+    with open(os.path.join('templates', 'library', 'index.html'), 'w', encoding='utf-8') as f:
+        f.write(library_template)
     template_content = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2765,6 +3408,7 @@ if __name__ == '__main__':
             <button class="header-btn" onclick="window.open('https://misterlauncher.org/capes/', '_blank')">🎨 MisterLauncher</button>
             <button class="header-btn" onclick="window.open('https://minecraftcapes.net/gallery/', '_blank')">🎞️ MinecraftCapes.net</button>
             <button class="header-btn" onclick="window.open('https://skinmc.net/capes', '_blank')">📋 SkinMC</button>
+            <a href="/library/" class="header-btn" style="text-decoration: none;">📚 Cape Library</a>
             <a href="/logout" class="header-btn" style="text-decoration: none;">🚪 Logout</a>
         </div>
         

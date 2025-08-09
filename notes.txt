@@ -1,6 +1,1 @@
-gif to cape
-remove totp visible on web
-delete api endpoint for command
-rename buttons
-
-web in main.py not index
+maybe upload video in library and convert?
