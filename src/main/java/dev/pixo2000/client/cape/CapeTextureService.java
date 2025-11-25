@@ -18,6 +18,7 @@ import net.minecraft.client.network.AbstractClientPlayerEntity;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.client.texture.TextureManager;
+import net.minecraft.util.AssetInfo;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.Util;
 
@@ -37,19 +38,18 @@ public final class CapeTextureService {
         CAPES.clear();
     }
 
-    public static Identifier getCapeTexture(AbstractClientPlayerEntity player) {
+    public static AssetInfo.TextureAsset getCapeTexture(AbstractClientPlayerEntity player) {
         UUID uuid = player.getUuid();
         CapeRecord record = CAPES.computeIfAbsent(uuid, ignored -> new CapeRecord());
         if (record.status == CapeStatus.READY) {
             AnimatedCapeState animated = record.animatedCape;
             if (animated != null) {
-                Identifier current = animated.currentTexture();
+                CapeTextureAsset current = animated.currentTexture();
                 if (current != null) {
-                    record.textureId = current;
-                    return current;
+                    record.texture = current;
                 }
             }
-            return record.textureId;
+            return record.texture;
         }
         if (record.status == CapeStatus.UNCHECKED) {
             record.status = CapeStatus.FETCHING;
@@ -113,8 +113,9 @@ public final class CapeTextureService {
         TextureManager textureManager = client.getTextureManager();
         if (decoded instanceof CapeImageDecoder.StaticCape staticCape) {
             Identifier identifier = Identifier.of(Voidcapes.MOD_ID, "capes/" + uuid);
+            CapeTextureAsset texture = new CapeTextureAsset(identifier);
             textureManager.registerTexture(identifier, createTexture(identifier, staticCape.image()));
-            updateRecord(uuid, identifier, null, staticCape.hasElytra());
+            updateRecord(uuid, texture, null, staticCape.hasElytra());
             return;
         }
 
@@ -125,7 +126,12 @@ public final class CapeTextureService {
                 return;
             }
             AnimatedCapeState state = new AnimatedCapeState(frames);
-            updateRecord(uuid, state.currentTexture(), state, animatedCape.hasElytra());
+            CapeTextureAsset texture = state.currentTexture();
+            if (texture == null) {
+                markFailed(uuid);
+                return;
+            }
+            updateRecord(uuid, texture, state, animatedCape.hasElytra());
         }
     }
 
@@ -174,18 +180,19 @@ public final class CapeTextureService {
             CapeImageDecoder.CapeFrame frame = frames.get(index);
             Identifier identifier = Identifier.of(Voidcapes.MOD_ID, "capes/" + uuid + "/" + index);
             textureManager.registerTexture(identifier, createTexture(identifier, frame.image()));
-            textures.add(new FrameTexture(identifier, Math.max(1, frame.delayMs())));
+            CapeTextureAsset texture = new CapeTextureAsset(identifier);
+            textures.add(new FrameTexture(texture, Math.max(1, frame.delayMs())));
         }
         return textures;
     }
 
-    private static void updateRecord(UUID uuid, Identifier identifier, AnimatedCapeState animatedCape, boolean hasElytra) {
+    private static void updateRecord(UUID uuid, CapeTextureAsset texture, AnimatedCapeState animatedCape, boolean hasElytra) {
         CAPES.compute(uuid, (ignored, record) -> {
             if (record == null) {
                 record = new CapeRecord();
             }
             record.status = CapeStatus.READY;
-            record.textureId = identifier;
+            record.texture = texture;
             record.animatedCape = animatedCape;
             record.hasElytraTexture = hasElytra;
             return record;
@@ -198,7 +205,7 @@ public final class CapeTextureService {
                 return null;
             }
             record.status = CapeStatus.FAILED;
-            record.textureId = null;
+            record.texture = null;
             record.animatedCape = null;
             record.hasElytraTexture = false;
             return record;
@@ -242,7 +249,7 @@ public final class CapeTextureService {
             }
             if (mode == FetchMode.FORCE_REFRESH) {
                 record.status = CapeStatus.UNCHECKED;
-                record.textureId = null;
+                record.texture = null;
                 record.animatedCape = null;
                 record.hasElytraTexture = false;
             }
@@ -269,7 +276,7 @@ public final class CapeTextureService {
 
     private static final class CapeRecord {
         private volatile CapeStatus status = CapeStatus.UNCHECKED;
-        private volatile Identifier textureId;
+        private volatile CapeTextureAsset texture;
         private volatile AnimatedCapeState animatedCape;
         private volatile boolean hasElytraTexture;
     }
@@ -281,12 +288,12 @@ public final class CapeTextureService {
 
         private AnimatedCapeState(List<FrameTexture> frames) {
             this.frames = frames;
-            long now = System.currentTimeMillis();
             this.frameIndex = 0;
-            this.nextFrameTime = now + frames.get(0).delayMs();
+            long now = System.currentTimeMillis();
+            this.nextFrameTime = frames.isEmpty() ? now : now + frames.get(0).delayMs();
         }
 
-        private Identifier currentTexture() {
+        private CapeTextureAsset currentTexture() {
             if (frames.isEmpty()) {
                 return null;
             }
@@ -295,11 +302,11 @@ public final class CapeTextureService {
                 frameIndex = (frameIndex + 1) % frames.size();
                 nextFrameTime = now + frames.get(frameIndex).delayMs();
             }
-            return frames.get(frameIndex).identifier();
+            return frames.get(frameIndex).texture();
         }
     }
 
-    private record FrameTexture(Identifier identifier, int delayMs) {
+    private record FrameTexture(CapeTextureAsset texture, int delayMs) {
     }
 
     private enum FetchMode {
