@@ -1,39 +1,42 @@
-# Intellij
+# gradle
+
+.gradle/
+build/
+out/
+classes/
+
+# eclipse
+
+*.launch
+
+# idea
+
+.idea/
 *.iml
 *.ipr
 *.iws
 
-# Generated java classes
-out
-classes
+# vscode
 
-# Vim
-*.swp
+.settings/
+.vscode/
+bin/
+.classpath
+.project
 
-# Plugins
-*.idea/checkstyle-idea.xml
+# macos
 
-# Gradle
-.gradle/
-build/
+*.DS_Store
 
-# Some files are user/installation independent and are used for configuring the IDE
-# See also https://stackoverflow.com/a/35279076
+# fabric
 
-.idea/*
-!.idea/saveactions_settings.xml
-!.idea/checkstyle-idea.xml
-!.idea/externalDependencies.xml
-
-!.idea/inspectionProfiles/
-.idea/inspectionProfiles/*
-!.idea/inspectionProfiles/Project_Default.xml
-
-!.idea/codeStyles/
-.idea/codeStyles/*
-!.idea/codeStyles/codeStyleConfig.xml
-!.idea/codeStyles/Project.xml
-
-# Custom
 run/
-out/
+
+# java
+
+hs_err_*.log
+replay_*.log
+*.hprof
+*.jfr
+
+

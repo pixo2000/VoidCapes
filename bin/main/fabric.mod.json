@@ -1,69 +1,35 @@
 {
-  "schemaVersion": 1,
-  "id": "voidcapes",
-  "version": "0.1.1",
-  "name": "VoidCapes",
-  "description": "VoidCube cape provider for Minecraft",
-  "authors": [
-    "pixo2000"
-  ],
-  "contributors": [
-    {
-      "name": "Cael & Capes mod contributors",
-      "contact": {
-        "homepage": "https://github.com/CaelTheColher/Capes"
-      }
-    },
-    {
-      "name": "litetex as provider coder",
-      "contact": {
-        "homepage": "https://github.com/litetex-oss/mcm-cape-provider"
-      }
-    }
-  ],
-  "contact": {
-    "homepage": "https://github.com/pixo2000/voidcapes",
+	"schemaVersion": 1,
+	"id": "voidcapes",
+	"version": "${version}",
+	"name": "VoidCapes",
+	"description": "VoidCube cape provider for Minecraft",
+	"authors": [
+		"pixo2000"
+	],
+	"contact": {
+    "homepage": "https://modrinth.com/mod/voidcapes",
     "sources": "https://github.com/pixo2000/voidcapes",
     "issues": "https://github.com/pixo2000/voidcapes/issues"
   },
-  "license": "${license_spdx_id}",
-  "icon": "assets/icon.png",
-  "environment": "client",
-  "entrypoints": {
-    "client": [
-      "net.litetex.capes.fabric.FabricCapes"
-    ],
-    "modmenu": [
-      "net.litetex.capes.fabric.compat.ModMenuCompatibility"
-    ]
-  },
-  "mixins": [
-    "cape-provider.mixins.json"
-  ],
-  "accessWidener": "cape-provider.accesswidener",
-  "requires": {
-    "fabric-api": "*"
-  },
-  "recommends": {
-    "fabricloader": ">=${loader_version}",
-    "minecraft": ">=${minecraft_version}",
-    "modmenu": ">=${modmenu_version}"
-  },
-  "breaks": {
-    "capes": "*"
-  },
-  "conflicts": {
-    "minecraftcapes": "*",
-    "wynntils": "*",
-    "capemod": "*",
-    "cicada": "*"
-  },
-  "custom": {
-    "modmenu": {
-      "links": {
-        "modmenu.github_releases": "https://github.com/pixo2000/voidcapes/releases",
-        "modmenu.modrinth": "https://modrinth.com/mod/voidcapes"
-      }
-    }
-  }
+	"license": "CC0-1.0",
+	"icon": "assets/voidcapes/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.pixo2000.Voidcapes"
+		],
+		"client": [
+			"dev.pixo2000.client.VoidcapesClient"
+		]
+	},
+	"mixins": [
+		"voidcapes.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.18.1",
+		"minecraft": "~1.21",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
 }

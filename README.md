@@ -1,54 +1,78 @@
-# VoidCapes
+# Voidcapes
 
-**VoidCapes** is a modified version of the [Cape Provider mod by litetex](https://modrinth.com/mod/cape-provider), specifically customized to work exclusively with VoidCube's cape service.
+Voidcapes is a Fabric 1.21.x client mod that fetches player capes from `https://voidcube.de/capes/<uuid>`.
+It supports static and animated textures (stacked PNG or GIF), per-player caching, and refresh commands so
+capes stay in sync while you are in game.
 
-You need a cat picture on your computer to use this mod!
+## Features
 
-[![Build and Upload Mod](https://github.com/pixo2000/VoidCapes/actions/workflows/build.yml/badge.svg)](https://github.com/pixo2000/VoidCapes/actions/workflows/build.yml)
-<a href="https://modrinth.com/mod/voidcapes"><img src="https://img.shields.io/modrinth/dt/voidcapes?logo=modrinth&label=Modrinth&style=flat&color=5ca424&suffix=%20&labelColor=black" alt="Modrinth"></a>
+- Downloads capes for every player that comes into render distance (prefetch + refresh caching).
+- Animated cape support with frame-based timing and optional elytra textures.
+- Auto-refresh loop plus `/caperefresh` command with user-defined interval.
+- Credential-backed commands (`/capelogin`, `/capeset`, `/caperemove`, `/capeconfirm`) that call the
+  VoidCube management API so you can update capes without leaving Minecraft.
 
-## ✨ Features
+## Commands
 
-- **🎯 VoidCube Integration**: Seamlessly connects to VoidCube's cape service for custom cape display
-- **👀 Live Preview**: Real-time cape preview with 3D player model in the mod menu
-- **🔄 Auto-Refresh**: Automatic cape updates every 3 minutes to show the latest changes
-- **⏱️ Countdown Timer**: Live countdown showing time until next automatic refresh
-- **🎬 Animated Capes**: Support for high-quality animated capes up to Full HD resolution
-- **🖱️ Manual Refresh**: Click the refresh button to instantly update your cape
-- **📊 Clean Logging**: All refresh activities logged with `[VoidCapes]` prefix for easy debugging
+| Command | Description |
+| --- | --- |
+| `/capelogin <username> <password>` | Encrypts and stores your API credentials under `.minecraft/config/voidcapes`. |
+| `/capecheck` | Shows whether credentials are saved and when. |
+| `/capeclear` | Deletes stored credentials and key files. |
+| `/capeset <totp> <player> <url>` | Uploads a remote cape for `<player>`. Prompts for confirmation if they already have one. |
+| `/caperemove <totp> <player>` | Removes the cape for `<player>` (confirmation required). |
+| `/capeconfirm` | Confirms the most recent `/capeset` or `/caperemove` request within 10 seconds. |
+| `/caperefresh` | Immediately refreshes all known players. |
+| `/caperefresh interval <seconds>` | Changes the automatic refresh cadence (default 300 seconds, min 5). |
 
 ## 🎨 Getting a Free Cape
 
 Want a custom cape? It's completely free! Simply message **"Xandarian"** on Discord to request your personalized cape.
 
-## FAQ
-Q: Will yo Support lower versions?
-A: Most likely not
+## Building the Mod
 
-Q: Can i get admin?
-A: No
+Requirements: Java 21, Gradle Wrapper (`gradlew` bundle).
 
-## Development
-
-### Build the Mod
-
-To compile the mod, run the following Gradle command:
-
-```cmd
-.\gradlew.bat build
+```powershell
+# from the repository root
+./gradlew.bat build
 ```
 
-The compiled mod file will be available in `build/libs/` directory.
+The compiled mod will be under `build/libs/voidcapes-<version>.jar`. Copy it into your Fabric client `mods/`
+folder alongside Fabric Loader and Fabric API matching the same Minecraft version.
 
-Note to Devs: All cape commands also start with /cape
+## Targeting Multiple Minecraft Versions
 
-## 🔧 Technical Details
+The project currently ships with Fabric 1.21.4 coordinates in `gradle.properties`:
 
-- **Fabric Mod Loader** compatible
-- **Client-side only** - no server installation required
-- **Synchronized timers** between auto-refresh and GUI countdown
-- **Full HD support** for animated cape textures
+```text
+minecraft_version=1.21.4
+yarn_mappings=1.21.4+build.8
+fabric_version=0.119.4+1.21.4
+```
 
-## 📝 Credits
+### Building for Minecraft 1.21.4 (default)
 
-This mod is based on the excellent [Cape Provider mod](https://modrinth.com/mod/cape-provider) by **litetex**. VoidCapes is a specialized fork focused on VoidCube's cape service with enhanced features and improved user experience.
+1. Ensure the values above are present (they already are in the repo).
+2. Run `./gradlew.bat clean build` to produce a 1.21.4-compatible jar.
+
+### Building for Minecraft 1.21.10
+
+1. Visit <https://fabricmc.net/develop> and note the **exact** versions for:
+   - `minecraft_version` (set to `1.21.10`).
+   - A matching Yarn mapping string, e.g. `1.21.10+build.<n>` once available.
+   - Fabric API string `fabric_version=0.<series>+1.21.10` that matches the loader release you install.
+2. Edit `gradle.properties` and replace the three values above with the 1.21.10 numbers.
+3. (Optional) update `fabric_version`/`loader_version` if Fabric lists newer releases for 1.21.10.
+4. Run `./gradlew.bat clean build` – the resulting jar will now target Minecraft 1.21.10.
+
+> **Tip:** keep two branches or local copies if you routinely build for both versions; swapping the
+> `gradle.properties` entries and running a clean build is enough to retarget the mod.
+
+## Troubleshooting
+
+- Delete `.gradle/` if Gradle complains about stale metadata after switching Minecraft versions.
+- Ensure Fabric Loader and Fabric API installed in your client match the same MC version you built.
+- Animated cape glitches usually mean the remote asset lacks a proper stacked PNG or GIF; check logs under
+  `.minecraft/logs/latest.log` for decoding errors tagged with `dev.pixo2000.voidcapes`.
+
