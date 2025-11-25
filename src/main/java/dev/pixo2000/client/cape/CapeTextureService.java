@@ -15,6 +15,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
+import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.client.texture.TextureManager;
 import net.minecraft.util.Identifier;
@@ -112,7 +113,7 @@ public final class CapeTextureService {
         TextureManager textureManager = client.getTextureManager();
         if (decoded instanceof CapeImageDecoder.StaticCape staticCape) {
             Identifier identifier = Identifier.of(Voidcapes.MOD_ID, "capes/" + uuid);
-            textureManager.registerTexture(identifier, new NativeImageBackedTexture(staticCape.image()));
+            textureManager.registerTexture(identifier, createTexture(identifier, staticCape.image()));
             updateRecord(uuid, identifier, null, staticCape.hasElytra());
             return;
         }
@@ -172,7 +173,7 @@ public final class CapeTextureService {
         for (int index = 0; index < frames.size(); index++) {
             CapeImageDecoder.CapeFrame frame = frames.get(index);
             Identifier identifier = Identifier.of(Voidcapes.MOD_ID, "capes/" + uuid + "/" + index);
-            textureManager.registerTexture(identifier, new NativeImageBackedTexture(frame.image()));
+            textureManager.registerTexture(identifier, createTexture(identifier, frame.image()));
             textures.add(new FrameTexture(identifier, Math.max(1, frame.delayMs())));
         }
         return textures;
@@ -210,6 +211,10 @@ public final class CapeTextureService {
         } else if (decoded instanceof CapeImageDecoder.AnimatedCape animatedCape) {
             animatedCape.frames().forEach(frame -> frame.image().close());
         }
+    }
+
+    private static NativeImageBackedTexture createTexture(Identifier identifier, NativeImage image) {
+        return new NativeImageBackedTexture(identifier::toString, image);
     }
 
     public static void prefetchCape(AbstractClientPlayerEntity player) {
